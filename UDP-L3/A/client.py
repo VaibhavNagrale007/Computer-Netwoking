@@ -2,7 +2,6 @@ import socket
 import struct
 import random
 import threading
-import time
 import sys
 import os
 import signal
@@ -25,14 +24,18 @@ header_size = struct.calcsize("!HBBII")
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 # Define the server address and port
-server_address = ('127.0.0.1', 50001)
+server_address = (str(sys.argv[1]), int(sys.argv[2]))
 
 # Function to handle sending messages to the server
 def send_messages():
     global timeout_alive_thread, sequence_number,session_id
     while True:
         sequence_number += 1
-        user_input = sys.stdin.readline().rstrip()
+        try:
+            user_input = input()
+        except EOFError:
+            user_input = 'eof'
+        # user_input = sys.stdin.readline().rstrip()
         if timeout_alive_thread.is_alive():
             timeout_alive_thread.cancel()
         timeout_alive_thread = threading.Timer(delay, handle_timeout)

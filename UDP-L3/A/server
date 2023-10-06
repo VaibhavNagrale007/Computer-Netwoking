@@ -1,0 +1,11 @@
+# Check if the correct number of arguments are provided
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 <hostname> <portnum>"
+    exit 1
+fi
+
+# Assign the provided arguments to variables
+portnum="$1"
+
+# Run the client.py script with the provided arguments
+python3 server.py "$portnum"

@@ -14,7 +14,7 @@ CMD_ALIVE = 2
 CMD_GOODBYE = 3
 
 # Initialize the sequence number and session_id
-delay = 50
+delay = 100
 sequence_number = 0
 session_id = random.randint(0, 0xFFFFFFFF)
 
@@ -24,7 +24,6 @@ header_size = struct.calcsize("!HBBII")
 
 async def send_messages(client_socket, server_address):
     global sequence_number,session_id, timer
-    # client_socket.sendto(struct.pack('!HBBII', 0xC461, 1, CMD_SETUP_CONNECTION, sequence_number, session_id), server_address)
     while True:
         sequence_number += 1
         # user_input = sys.stdin.readline().rstrip()
@@ -36,7 +35,7 @@ async def send_messages(client_socket, server_address):
         timer = asyncio.create_task(start_timer(client_socket))
         
         if user_input == 'q' or user_input == 'eof':
-            # Send a goodbye message (4) to the server and exit
+            # Send a goodbye message (3) to the server and exit
             client_socket.sendto(struct.pack('!HBBII', 0xC461, 1, CMD_GOODBYE, sequence_number, session_id) + user_input.encode(), server_address)
             break
         else:
@@ -80,7 +79,7 @@ async def start_timer(client_socket):
     sys.exit()
 
 async def main():
-    server_address = ('127.0.0.1', 50001)
+    server_address = (str(sys.argv[1]), int(sys.argv[2]))
     client_socket = await asyncudp.create_socket(remote_addr=server_address)
     # await connect_server(client_socket, server_address)
 

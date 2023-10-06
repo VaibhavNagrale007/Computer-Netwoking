@@ -1,11 +1,11 @@
-import asyncio
-import asyncudp
-import aioconsole
+import socket
 import struct
-import os
+import threading
 import sys
-import signal
 import time
+from queue import Queue
+import os
+import signal
 
 # Define constants for command header fields
 CMD_SETUP_CONNECTION = 0
@@ -13,26 +13,37 @@ CMD_DATA = 1
 CMD_ALIVE = 2
 CMD_GOODBYE = 3
 
-delay = 100
+delay = 10
 active_sessions = {}        # stores tuple (session_id, client_address)
 message_tuple = {}          # stores message for given session_id in Queue
 # last_activity_time = {}     # stores last activity time for session_id
 # storing sequence number and time wrt session_id
 sequence_dict = {}
-# timeout_dict = {}
+timeout_dict = {}
 
 # Check if the received data has the correct header structure
 header_size = struct.calcsize("!HBBII")
 
+# Create a UDP socket
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+# Define the server address and port
+server_address = ('', int(sys.argv[1]))
+
+# Bind the socket to the server address
+server_socket.bind(server_address)
+
+print(f"Waiting on port {server_address[1]}...")
+
 # Function to handle incoming messages from a client
-async def handle_client(session_id, server_socket):
-    global timer
+def handle_client(session_id):
+    global timeout_dict
     # get active session data
     client_address = active_sessions[session_id]
     expected_sequence_number = 0
     while True:
         # get data from thread
-        _, _, command, sequence_number, session_id, message = await message_tuple[session_id].get()
+        _, _, command, sequence_number, session_id, message = message_tuple[session_id].get()
 
         if sequence_number > expected_sequence_number:
             # while True:
@@ -54,44 +65,43 @@ async def handle_client(session_id, server_socket):
             #     print("===========================3")
             # delete proper data wrt session_id
             del active_sessions[session_id]
-            # del last_activity_time[session_id]
             break
 
         else:
             expected_sequence_number += 1
 
+        # time.sleep(0.1)
+
         # Process the packet based on the command
         if command == CMD_SETUP_CONNECTION: # Reply with 0 for connection setup
+            timeout_dict[session_id] = threading.Timer(delay, handle_timeout, args=(session_id, ))
+            timeout_dict[session_id].start()
             print(f"{hex(session_id)} [{sequence_number}] Session created")
             server_socket.sendto(struct.pack('!HBBII', 0xC461, 1, CMD_SETUP_CONNECTION, sequence_number, session_id), client_address)
-            timer = asyncio.create_task(start_timer(server_socket, session_id))
 
         elif command == CMD_DATA:           # Reply with 2 for Alive
+            timeout_dict[session_id].cancel()
+            timeout_dict[session_id] = threading.Timer(delay, handle_timeout, args=(session_id, ))
+            timeout_dict[session_id].start()
             print(f"{hex(session_id)} [{sequence_number}] {message.decode()}")
             server_socket.sendto(struct.pack('!HBBII', 0xC461, 1, CMD_ALIVE, sequence_number, session_id), client_address)
-            if timer:
-                timer.cancel()
-            timer = asyncio.create_task(start_timer(server_socket, session_id))
-
+            
         elif command == CMD_GOODBYE:        # Reply with 3 for Goodbye
-            # timeout_dict[session_id].cancel()
+            timeout_dict[session_id].cancel()
             
             print(f"{hex(session_id)} [{sequence_number}] GOODBYE from client.")
             server_socket.sendto(struct.pack('!HBBII', 0xC461, 1, CMD_GOODBYE, sequence_number, session_id), client_address)
             
             # delete proper data wrt session_id
             del active_sessions[session_id]
-
-            if timer:
-                timer.cancel()
-            # del last_activity_time[session_id]
             
             print(f"{hex(session_id)} Session closed")
             break
 
-async def quit_server(server_socket):
+# Function to quit the server
+def quit_server():
     while True:
-        user_input = await aioconsole.ainput()
+        user_input = sys.stdin.readline().rstrip()
         if user_input == 'q':
             # Send a goodbye message to all connected clients
             for session_id, client_address in active_sessions.items():
@@ -99,7 +109,6 @@ async def quit_server(server_socket):
             
             # clear dicts
             active_sessions.clear()
-            # last_activity_time.clear()
 
             # kill process
             server_socket.close()
@@ -109,11 +118,10 @@ async def quit_server(server_socket):
             break
         time.sleep(1)
 
-async def get_packet(server_socket):
-    # global timeout_thread
+def get_packet():
     while True:
         # Receive data from the client
-        data, client_address = await server_socket.recvfrom()
+        data, client_address = server_socket.recvfrom(1024) 
 
         # Unpack the header fields
         magic, version, command, sequence_number, session_id = struct.unpack('!HBBII', data[:header_size])
@@ -124,9 +132,6 @@ async def get_packet(server_socket):
         if magic != 0xC461 or version != 1:
             print(f"Received packet with invalid magic or version from {client_address}. Discarding...")
             continue
-        
-        # if command == CMD_SETUP_CONNECTION: 
-        #     print(f"{session_id} {sequence_dict[session_id]} connecion reiceved here1")
 
         # Process the packet based on the session ID
         if session_id not in active_sessions:
@@ -134,33 +139,33 @@ async def get_packet(server_socket):
             if command != CMD_SETUP_CONNECTION or sequence_dict[session_id] != 0:
                 continue
 
+            # Created new Session and stored in dict of active_sessions
             active_sessions[session_id] = client_address
 
             # message_tuple stores messages and session_dict store client addres for each session id
-            message_tuple[session_id] = asyncio.Queue()
+            message_tuple[session_id] = Queue()
 
-            asyncio.create_task(handle_client(session_id, server_socket))
+            # Create a thread for each new session
+            session_thread = threading.Thread(target=handle_client, args=(session_id, ))
+            session_thread.daemon = True
+            session_thread.start()
         # Inserting message to respective session_id into Queue
-        await message_tuple[session_id].put((magic, version, command, sequence_dict[session_id], session_id, data[header_size:]))
+        message_tuple[session_id].put((magic, version, command, sequence_dict[session_id], session_id, data[header_size:]))
 
-async def start_timer(server_socket, session_id):
-    await asyncio.sleep(delay)
+def handle_timeout(session_id):
     if session_id in active_sessions:
-        print("Timeout occurred.")
+        print(f"Timeout for {hex(session_id)}")
         server_socket.sendto(struct.pack('!HBBII', 0xC461, 1, CMD_GOODBYE, sequence_dict[session_id], session_id) + 'q'.encode(), active_sessions[session_id])
-        del active_sessions[session_id]
+    # del active_sessions[session_id]
 
-async def main():
-    server_address = ('127.0.0.1', 50001)
-    server_socket = await asyncudp.create_socket(local_addr=server_address)
+# Start the thread for closing server
+quit_thread = threading.Thread(target=quit_server)
+server_thread = threading.Thread(target=get_packet)
 
-    quit_task = asyncio.create_task(quit_server(server_socket))
-    get_tasks = asyncio.create_task(get_packet(server_socket))
+quit_thread.start()
+server_thread.start()
 
-    await asyncio.gather(quit_task, get_tasks)
-
-# asyncio.run(main())
-if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
-    loop.close()
+# quit_thread.join()
+server_thread.join()
+# Close the server socket when done
+server_socket.close()
