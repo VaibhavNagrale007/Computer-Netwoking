@@ -1,0 +1,5 @@
+25 Jan 10:49:29 - Proxy listening on 0.0.0.0:1234
+25 Jan 10:49:35 - >>> GET http://www.google.com/ 
+25 Jan 10:49:35 - >>> CONNECT www.google.com:443 
+25 Jan 10:49:36 - >>> CONNECT www.gstatic.com:443 
+25 Jan 10:49:36 - >>> CONNECT apis.google.com:443 
